@@ -21,6 +21,23 @@ CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY AUTOINCREMENT,us
 db.exec('CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY,trip_id INTEGER REFERENCES trips(id) ON DELETE CASCADE,created_at TEXT DEFAULT CURRENT_TIMESTAMP);');
 db.exec('CREATE TABLE IF NOT EXISTS settlement_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,trip_id INTEGER REFERENCES trips(id) ON DELETE CASCADE,from_name TEXT NOT NULL,to_name TEXT NOT NULL,amount REAL NOT NULL,paid_at TEXT DEFAULT CURRENT_TIMESTAMP);');
 
+// Older or partially initialized trips may have dates but no itinerary rows.
+// Restore those days on startup so the itinerary editor always has a valid day to target.
+const tripsWithDates = db.prepare('SELECT id,start,end FROM trips').all() as { id: number; start: string; end: string }[];
+const addTripDay = db.prepare('INSERT INTO days(trip_id,date) VALUES(?,?)');
+const getTripDays = db.prepare('SELECT date FROM days WHERE trip_id=?');
+for (const trip of tripsWithDates) {
+  const start = Date.parse(`${trip.start}T00:00:00Z`);
+  const end = Date.parse(`${trip.end}T00:00:00Z`);
+  const dayCount = Math.floor((end - start) / 86400000) + 1;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || dayCount < 1 || dayCount > 45) continue;
+  const existingDates = new Set((getTripDays.all(trip.id) as { date: string }[]).map(day => day.date));
+  for (let i = 0; i < dayCount; i++) {
+    const date = new Date(start + i * 86400000).toISOString().slice(0, 10);
+    if (!existingDates.has(date)) addTripDay.run(trip.id, date);
+  }
+}
+
 export const passwordHash = (password: string, salt = randomBytes(16).toString('hex')) => `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
 export const checkPassword = (password: string, value: string) => { const [salt, hash] = value.split(':'); return scryptSync(password, salt, 64).toString('hex') === hash; };
 export const signToken = (user: { id: string; name: string; email: string }) => {
